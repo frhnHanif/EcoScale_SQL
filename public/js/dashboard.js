@@ -1,16 +1,52 @@
-import {
-    initializeFirebase,
-    updateCurrentDate,
-    setupGlobalSampahListener
-} from "./firebaseService.js";
+// public/js/dashboard.js (REFACTORED for Laravel API)
 
-// Global variables for charts
+// Hapus semua impor Firebase
+
 let weeklyTrendChart;
 let typeDistributionChart;
 
-// --- Helper Functions for Chart/UI Initialization ---
+/**
+ * Helper untuk mengambil data JSON dari endpoint Laravel
+ * @param {string} url - URL API (cth: '/api/data/dashboard')
+ * @returns {Promise<object>} - Data JSON
+ */
+async function fetchData(url) {
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error(`Error fetching data from ${url}:`, error);
+        // Kembalikan objek kosong agar UI tidak crash
+        return {};
+    }
+}
 
-// Initialize Weekly Trend Chart
+/**
+ * Memperbarui tanggal terkini pada elemen HTML.
+ * @param {string} elementId - ID elemen HTML yang akan diperbarui.
+ */
+function updateCurrentDate(elementId) {
+    const today = new Date();
+    const dateElement = document.getElementById(elementId);
+    if (dateElement) {
+        const options = {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        };
+        const formattedDate = today.toLocaleDateString('id-ID', options);
+        dateElement.textContent = formattedDate;
+    } else {
+        console.warn(`Element with ID '${elementId}' not found for date update.`);
+    }
+}
+
+// --- Fungsi Inisialisasi Chart (Tidak berubah banyak) ---
+
 function initWeeklyTrendChart(ctxId) {
     const ctx = document.getElementById(ctxId)?.getContext('2d');
     if (ctx) {
@@ -20,7 +56,7 @@ function initWeeklyTrendChart(ctxId) {
                 labels: ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'],
                 datasets: [{
                     label: 'Berat Sampah (kg)',
-                    data: [0, 0, 0, 0, 0, 0, 0],
+                    data: [0, 0, 0, 0, 0, 0, 0], // Data awal
                     borderColor: '#14b8a6',
                     backgroundColor: 'rgba(20, 184, 166, 0.1)',
                     fill: true,
@@ -28,16 +64,8 @@ function initWeeklyTrendChart(ctxId) {
                 }]
             },
             options: {
-                scales: {
-                    y: {
-                        beginAtZero: true
-                    }
-                },
-                plugins: {
-                    legend: {
-                        display: false
-                    }
-                }
+                scales: { y: { beginAtZero: true } },
+                plugins: { legend: { display: false } }
             }
         });
     } else {
@@ -45,19 +73,15 @@ function initWeeklyTrendChart(ctxId) {
     }
 }
 
-
-// --- Custom Chart.js Plugin for "No Data Today" text in Doughnut Chart ---
 const noDataDoughnutText = {
+    // ... (Plugin noDataDoughnutText bisa dicopy-paste dari file lama, tidak berubah)
     id: 'noDataDoughnutText',
     beforeDraw(chart, args, options) {
-        const {
-            ctx,
-            data
-        } = chart;
+        const { ctx, data } = chart;
         const total = data.datasets[0].data.reduce((sum, val) => sum + val, 0);
-        const isNoRealData = (total === 1 && data.labels.length === 1 && data.labels[0] === 'No Data Today');
-
-        if (isNoRealData) {
+        
+        // Cek jika total 0
+        if (total === 0) {
             ctx.save();
             ctx.font = '16px Inter, sans-serif';
             ctx.fillStyle = '#888';
@@ -71,8 +95,6 @@ const noDataDoughnutText = {
     }
 };
 
-
-// Initialize Type Distribution Chart (Doughnut) with "No Data" plugin
 function initTypeDistributionChart(ctxId) {
     const ctx = document.getElementById(ctxId)?.getContext('2d');
     if (ctx) {
@@ -81,7 +103,7 @@ function initTypeDistributionChart(ctxId) {
             data: {
                 labels: ['Organik (kg)', 'Anorganik (kg)', 'Residu (kg)'],
                 datasets: [{
-                    data: [1, 1, 1],
+                    data: [0, 0, 0], // Data awal
                     backgroundColor: ['#62B682', '#5C7AF3', '#D35748'],
                     hoverOffset: 4,
                     borderColor: '#ffffff',
@@ -89,98 +111,112 @@ function initTypeDistributionChart(ctxId) {
                 }]
             },
             options: {
-                plugins: {
-                    legend: {
-                        position: 'bottom'
-                    },
-                },
+                plugins: { legend: { position: 'bottom' } },
                 responsive: true,
-                maintainAspectRatio: false
+                maintainAspectRatio: false,
+                cutout: '80%' // Set cutout
             },
-            plugins: [noDataDoughnutText] // Register the plugin
+            plugins: [noDataDoughnutText] // Daftarkan plugin
         });
     } else {
         console.warn(`Canvas element with ID '${ctxId}' not found.`);
     }
 }
 
+// --- Fungsi Update UI Utama ---
 
-// --- Page-specific UI Update Function (called by firebaseService) ---
-function updateDashboardSpecificUI(data) {
-    // Default values untuk mencegah error jika data tidak lengkap
-    const {
-        overviewOrganikToday = 0,
-        overviewAnorganikToday = 0,
-        overviewResiduToday = 0,
-        weeklyTotalData = [0, 0, 0, 0, 0, 0, 0]
-    } = data || {};
+async function updateDashboardUI() {
+    // 1. Ambil data global stats
+    const globalStats = await fetchData('/api/data/global-stats');
+    if (globalStats) {
+        updateGlobalStatCards(globalStats);
+    }
 
-    // 1. Update kartu ringkasan "Overview Garbage Summary"
-    // (Logika ini sudah benar, tidak perlu diubah)
-    const overviewTotalSampahElem = document.getElementById('total-sampah');
-    if (overviewTotalSampahElem) overviewTotalSampahElem.textContent = (overviewOrganikToday + overviewAnorganikToday + overviewResiduToday).toFixed(1);
+    // 2. Ambil data spesifik dashboard
+    const data = await fetchData('/api/data/dashboard');
+    if (!data) return; // Gagal fetch
 
-    const overviewTotalOrganikElem = document.getElementById('total-organik');
-    if (overviewTotalOrganikElem) overviewTotalOrganikElem.textContent = overviewOrganikToday.toFixed(1);
+    const { overview, weekly_trend } = data;
 
-    const overviewTotalAnorganikElem = document.getElementById('total-anorganik');
-    if (overviewTotalAnorganikElem) overviewTotalAnorganikElem.textContent = overviewAnorganikToday.toFixed(1);
+    // 3. Update kartu "Overview Garbage Summary"
+    if (overview) {
+        document.getElementById('total-sampah').textContent = (overview.organik + overview.anorganik + overview.residu).toFixed(1);
+        document.getElementById('total-organik').textContent = overview.organik.toFixed(1);
+        document.getElementById('total-anorganik').textContent = overview.anorganik.toFixed(1);
+        document.getElementById('total-residu').textContent = overview.residu.toFixed(1);
+    }
 
-    const overviewTotalResiduElem = document.getElementById('total-residu');
-    if (overviewTotalResiduElem) overviewTotalResiduElem.textContent = overviewResiduToday.toFixed(1);
-
-
-    // 2. Update Grafik Tren Mingguan
-    // (Logika ini sudah benar, tidak perlu diubah)
-    if (weeklyTrendChart) {
-        weeklyTrendChart.data.datasets[0].data = weeklyTotalData;
+    // 4. Update Grafik Tren Mingguan
+    if (weekly_trend && weeklyTrendChart) {
+        weeklyTrendChart.data.datasets[0].data = weekly_trend;
         weeklyTrendChart.update();
     }
 
-
-    // 3. Update Grafik Distribusi Jenis (Doughnut)
-    if (typeDistributionChart) {
-        const hasActualData = overviewOrganikToday > 0 || overviewAnorganikToday > 0 || overviewResiduToday > 0;
-
-        if (hasActualData) {
-            // Jika ADA DATA, tampilkan data aktual
-            typeDistributionChart.data.datasets[0].data = [overviewOrganikToday, overviewAnorganikToday, overviewResiduToday];
-            typeDistributionChart.data.datasets[0].backgroundColor = ['#62B682', '#5C7AF3', '#D35748'];
-            typeDistributionChart.data.labels = ['Organik (kg)', 'Anorganik (kg)', 'Residu (kg)'];
-            typeDistributionChart.options.plugins.legend.display = true;
-        } else {
-            // Jika TIDAK ADA DATA, biarkan plugin yang bekerja
-            // Kita hanya perlu mengatur data agar plugin terpicu
-            typeDistributionChart.data.datasets[0].data = [1]; // Data dummy untuk memicu plugin
-            typeDistributionChart.data.datasets[0].backgroundColor = ['#E5E7EB']; // Warna abu-abu netral
-            typeDistributionChart.data.labels = ['No Data Today']; // Label yang dikenali plugin
-            typeDistributionChart.options.plugins.legend.display = false; // Sembunyikan legenda
-        }
-
-        // PERUBAHAN PENTING:
-        // Biarkan 'cutout' konsisten agar bentuk donat tidak berubah-ubah.
-        // Plugin akan menggambar teks "No Data Today" di tengah.
-        typeDistributionChart.options.cutout = '80%';
-        
+    // 5. Update Grafik Distribusi Jenis (Doughnut)
+    if (overview && typeDistributionChart) {
+        const chartData = [overview.organik, overview.anorganik, overview.residu];
+        typeDistributionChart.data.datasets[0].data = chartData;
         typeDistributionChart.update();
     }
 }
 
+/**
+ * Helper untuk update 4 kartu statistik global
+ */
+function updateGlobalStatCards(stats) {
+    document.getElementById('total-sampah-today').textContent = stats.total_sampah_today;
+    document.getElementById('active-faculties').textContent = stats.active_faculties;
+    document.getElementById('avg-reduction').textContent = stats.avg_reduction;
+    
+    // Logika Status Lingkungan
+    const targetReduction = stats.target_reduction_last_month;
+    const avgReduction = stats.avg_reduction;
 
-// --- DOMContentLoaded Listener ---
-document.addEventListener('DOMContentLoaded', function () {
-    const firebaseConfig = window.firebaseConfig;
-
-    if (firebaseConfig) {
-        initializeFirebase(firebaseConfig);
-        updateCurrentDate('current-date');
-
-        initWeeklyTrendChart('weeklyTrendChart');
-        initTypeDistributionChart('typeDistributionChart');
-
-        setupGlobalSampahListener(updateDashboardSpecificUI);
-
-    } else {
-        console.error("Firebase configuration not found in window.firebaseConfig. Check your Blade file.");
+    let achievementPercentage = 0;
+    if (targetReduction > 0) {
+        achievementPercentage = (Math.max(0, avgReduction) / targetReduction) * 100;
+    } else if (avgReduction > 0) {
+        achievementPercentage = 100; // Jika tidak ada target tapi ada reduksi
     }
-});
+
+    let envStatusText = 'Kurang';
+    let envStatusSubtitleText = 'Capaian reduksi < 60%';
+    let borderColor = 'bg-red-500';
+    let textColor = 'text-red-600';
+
+    if (achievementPercentage >= 85) {
+        envStatusText = 'Baik';
+        envStatusSubtitleText = 'Capaian Reduksi > 85%';
+        borderColor = 'bg-green-500';
+        textColor = 'text-green-600';
+    } else if (achievementPercentage >= 60) {
+        envStatusText = 'Cukup';
+        envStatusSubtitleText = 'Capaian Reduksi 60-85%';
+        borderColor = 'bg-yellow-500';
+        textColor = 'text-yellow-600';
+    }
+
+    document.getElementById('env-status').textContent = envStatusText;
+    document.getElementById('env-status-subtitle').textContent = envStatusSubtitleText;
+    document.getElementById('env-status-border').className = `absolute top-0 left-0 h-full w-1.5 ${borderColor} rounded-l-xl`;
+    document.getElementById('env-status-text').className = `text-3xl font-bold ${textColor}`;
+}
+
+/**
+ * Fungsi inisialisasi utama untuk halaman ini
+ * Dipanggil dari file Blade
+ */
+export function initDashboardPage() {
+    // Tidak perlu `firebaseConfig` lagi
+    console.log("Dashboard Page Initialized (SQL Mode)");
+
+    updateCurrentDate('current-date');
+    initWeeklyTrendChart('weeklyTrendChart');
+    initTypeDistributionChart('typeDistributionChart');
+
+    // Langsung panggil update UI
+    updateDashboardUI();
+    
+    // Anda bisa menambahkan polling jika ingin data real-time
+    // setInterval(updateDashboardUI, 30000); // Contoh: refresh setiap 30 detik
+}

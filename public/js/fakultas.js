@@ -1,14 +1,7 @@
-// public/js/fakultas.js
+// public/js/fakultas.js (REFACTORED for Laravel API)
 
-import { Timestamp, collection, query, where, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-import { initializeFirebase, getFirestoreInstance, updateCurrentDate, setupGlobalSampahListener } from "./firebaseService.js";
+// Hapus semua impor Firebase
 
-let db;
-let unsubscribe;
-
-const facultyTargets = {
-    'FT': 50, 'FK': 45, 'FEB': 55, 'FH': 35, 'FSM': 40, 'FPP': 60
-};
 const colors = ['#2dd4bf', '#38bdf8', '#a78bfa', '#facc15', '#fb923c'];
 
 let reductionFilter = 'today';
@@ -23,10 +16,73 @@ const baseButtonClasses = "px-4 py-2 text-sm font-medium transition-colors durat
 const activeClasses = "bg-teal-600 text-white hover:bg-teal-700";
 const inactiveClasses = "bg-white text-gray-900 hover:bg-gray-100 hover:text-teal-700";
 
-let allAggregatedData = null;
+/**
+ * Helper untuk mengambil data JSON dari endpoint Laravel
+ */
+async function fetchData(url) {
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error(`Error fetching data from ${url}:`, error);
+        return null;
+    }
+}
+
+/**
+ * Memperbarui tanggal terkini pada elemen HTML.
+ */
+function updateCurrentDate(elementId) {
+    const today = new Date();
+    const dateElement = document.getElementById(elementId);
+    if (dateElement) {
+        const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+        const formattedDate = today.toLocaleDateString('id-ID', options);
+        dateElement.textContent = formattedDate;
+    }
+}
+
+/**
+ * Helper untuk update 4 kartu statistik global
+ */
+async function updateGlobalStatCards() {
+    const stats = await fetchData('/api/data/global-stats');
+    if (!stats) return;
+    
+    document.getElementById('total-sampah-today').textContent = stats.total_sampah_today;
+    document.getElementById('active-faculties').textContent = stats.active_faculties;
+    document.getElementById('avg-reduction').textContent = stats.avg_reduction;
+    
+    const targetReduction = stats.target_reduction_last_month;
+    const avgReduction = stats.avg_reduction;
+
+    let achievementPercentage = 0;
+    if (targetReduction > 0) {
+        achievementPercentage = (Math.max(0, avgReduction) / targetReduction) * 100;
+    } else if (avgReduction > 0) {
+        achievementPercentage = 100;
+    }
+
+    let envStatusText = 'Kurang', envStatusSubtitleText = 'Capaian reduksi < 60%', borderColor = 'bg-red-500', textColor = 'text-red-600';
+    if (achievementPercentage >= 85) {
+        envStatusText = 'Baik'; envStatusSubtitleText = 'Capaian Reduksi > 85%'; borderColor = 'bg-green-500'; textColor = 'text-green-600';
+    } else if (achievementPercentage >= 60) {
+        envStatusText = 'Cukup'; envStatusSubtitleText = 'Capaian Reduksi 60-85%'; borderColor = 'bg-yellow-500'; textColor = 'text-yellow-600';
+    }
+
+    document.getElementById('env-status').textContent = envStatusText;
+    document.getElementById('env-status-subtitle').textContent = envStatusSubtitleText;
+    document.getElementById('env-status-border').className = `absolute top-0 left-0 h-full w-1.5 ${borderColor} rounded-l-xl`;
+    document.getElementById('env-status-text').className = `text-3xl font-bold ${textColor}`;
+}
 
 
+// Fungsi style (tidak berubah)
 function applyFilterButtonStyles(type) {
+    // ... (Fungsi ini sama persis, copy-paste dari file lama)
     if (type === 'reduction') {
         const structuralClasses = "border border-gray-200";
         reductionBtnToday.className = baseButtonClasses + " " + structuralClasses + " rounded-l-lg";
@@ -55,208 +111,49 @@ function applyFilterButtonStyles(type) {
     }
 }
 
-function getPeriodDates(filter) {
-    const now = new Date();
-    let startDate, endDate, previousStartDate, previousEndDate;
-
-    if (filter === 'today') {
-        startDate = new Date(now.setHours(0, 0, 0, 0));
-        endDate = new Date(now);
-        endDate.setHours(23, 59, 59, 999);
-        previousStartDate = new Date(startDate);
-        previousStartDate.setDate(previousStartDate.getDate() - 1);
-        previousEndDate = new Date(startDate.getTime() - 1);
-    } else if (filter === 'weekly') {
-        const day = now.getDay();
-        const diff = now.getDate() - day + (day === 0 ? -6 : 1);
-        startDate = new Date(new Date().setDate(diff));
-        startDate.setHours(0, 0, 0, 0);
-        endDate = new Date(startDate);
-        endDate.setDate(endDate.getDate() + 6);
-        endDate.setHours(23, 59, 59, 999);
-        previousStartDate = new Date(startDate);
-        previousStartDate.setDate(previousStartDate.getDate() - 7);
-        previousEndDate = new Date(startDate.getTime() - 1);
-    } else { // 'monthly'
-        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-        endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-        endDate.setHours(23, 59, 59, 999);
-        previousStartDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        previousEndDate = new Date(now.getFullYear(), now.getMonth(), 0);
-        previousEndDate.setHours(23, 59, 59, 999);
-    }
-
-    return { startDate, endDate, previousStartDate, previousEndDate };
-}
-
-function setupFakultasPageListener() {
-    if (unsubscribe) unsubscribe();
-
+/**
+ * Fungsi baru untuk mengambil data dari API dan me-render leaderboard
+ */
+async function fetchAndRenderLeaderboards() {
+    // Tampilkan loading
     reductionLeaderboardContainer.innerHTML = '<p class="text-center text-gray-500">Memuat data...</p>';
     targetLeaderboardContainer.innerHTML = '<p class="text-center text-gray-500">Memuat data...</p>';
+
+    // Bangun URL API dengan parameter filter
+    const url = `/api/data/fakultas?reduction=${reductionFilter}&target=${targetFilter}`;
     
-    if (!db) {
-        db = getFirestoreInstance();
-        if (!db) {
-            console.error("Firestore DB is null. Cannot fetch data.");
-            return;
-        }
-    }
-
-    // --- BATAS WAKTU ---
-    const now = new Date();
-    const endOfToday = new Date(new Date().setHours(23, 59, 59, 999));
-    const startOfToday = new Date(new Date().setHours(0, 0, 0, 0));
-    
-    // Kembalikan logika untuk 'kemarin'
-    const startOfYesterday = new Date(new Date(startOfToday).setDate(startOfToday.getDate() - 1));
-
-    // Untuk mingguan (7 hari)
-    const startOfLast7Days = new Date(new Date().setDate(now.getDate() - 6));
-    startOfLast7Days.setHours(0, 0, 0, 0);
-    const startOfPrevious7Days = new Date(new Date(startOfLast7Days).setDate(startOfLast7Days.getDate() - 7));
-
-    // Untuk bulanan (30 hari)
-    const startOfLast30Days = new Date(new Date().setDate(now.getDate() - 29));
-    startOfLast30Days.setHours(0, 0, 0, 0);
-    const startOfPrevious30Days = new Date(new Date(startOfLast30Days).setDate(startOfLast30Days.getDate() - 30));
-
-    // Ambil data yang cukup untuk semua perhitungan
-    const queryStartDate = Timestamp.fromDate(startOfPrevious30Days);
-    const q = query(collection(db, "sampah"), where("timestamp", ">=", queryStartDate));
-
-    unsubscribe = onSnapshot(q, (querySnapshot) => {
-        const aggregatedData = {
-            today: {},
-            previousDay: {}, // <-- DIKEMBALIKAN
-            last7Days: {}, previous7Days: {},
-            last30Days: {}, previous30Days: {}
-        };
-
-        querySnapshot.forEach(doc => {
-            const data = doc.data();
-            if (data.jenis === 'Umum') return;
-            
-            const docDate = data.timestamp?.toDate();
-            if (!docDate) return;
-
-            const fakultas = data.fakultas;
-            const berat = parseFloat(data.berat) || 0;
-            if (!fakultas) return;
-
-            // Inisialisasi
-            Object.keys(aggregatedData).forEach(period => {
-                if (!aggregatedData[period][fakultas]) aggregatedData[period][fakultas] = 0;
-            });
-
-            // --- Logika Agregasi ---
-            if (docDate >= startOfToday && docDate <= endOfToday) {
-                aggregatedData.today[fakultas] += berat;
-            } else if (docDate >= startOfYesterday && docDate < startOfToday) { // <-- DIKEMBALIKAN
-                aggregatedData.previousDay[fakultas] += berat;
-            }
-
-            // Rolling 7 Days
-            if (docDate >= startOfLast7Days && docDate <= endOfToday) {
-                aggregatedData.last7Days[fakultas] += berat;
-            } else if (docDate >= startOfPrevious7Days && docDate < startOfLast7Days) {
-                aggregatedData.previous7Days[fakultas] += berat;
-            }
-            
-            // Rolling 30 Days
-            if (docDate >= startOfLast30Days && docDate <= endOfToday) {
-                aggregatedData.last30Days[fakultas] += berat;
-            } else if (docDate >= startOfPrevious30Days && docDate < startOfLast30Days) {
-                aggregatedData.previous30Days[fakultas] += berat;
-            }
-        });
-
-        allAggregatedData = aggregatedData;
-        renderAllLeaderboards();
-    }, error => {
-        console.error("Error fetching all data:", error);
+    const data = await fetchData(url);
+    if (!data) {
         reductionLeaderboardContainer.innerHTML = '<p class="text-center text-red-500">Gagal memuat data.</p>';
         targetLeaderboardContainer.innerHTML = '<p class="text-center text-red-500">Gagal memuat data.</p>';
-    });
-}
-
-function renderAllLeaderboards() {
-    if (!allAggregatedData) {
-        reductionLeaderboardContainer.innerHTML = '<p class="text-center text-gray-500">Menunggu data...</p>';
-        targetLeaderboardContainer.innerHTML = '<p class="text-center text-gray-500">Menunggu data...</p>';
         return;
     }
 
-    let reductionCurrentData, reductionPreviousData, targetData;
-
-    if (reductionFilter === 'today') {
-        reductionCurrentData = allAggregatedData.today;
-        reductionPreviousData = allAggregatedData.previousDay;
-    } else if (reductionFilter === 'weekly') {
-        reductionCurrentData = allAggregatedData.last7Days;
-        reductionPreviousData = allAggregatedData.previous7Days;
-    } else {
-        reductionCurrentData = allAggregatedData.last30Days;
-        reductionPreviousData = allAggregatedData.previous30Days;
-    }
-    
-    if (targetFilter === 'today') {
-        targetData = allAggregatedData.today;
-    } else if (targetFilter === 'weekly') {
-        targetData = allAggregatedData.last7Days;
-    } else {
-        targetData = allAggregatedData.last30Days;
-    }
-
-    renderReductionLeaderboard(reductionCurrentData, reductionPreviousData);
-    renderTargetLeaderboard(targetData);
+    renderReductionLeaderboard(data.reduction_leaderboard);
+    renderTargetLeaderboard(data.target_leaderboard);
 }
 
-function renderReductionLeaderboard(currentData, previousData) {
-    const container = document.getElementById('reduction-leaderboard-container');
+
+// Fungsi render (SEDIKIT BERUBAH): Menerima data yang sudah jadi
+function renderReductionLeaderboard(sortedData) {
+    const container = reductionLeaderboardContainer;
     container.innerHTML = '';
-    const combinedData = {};
-    Object.keys(facultyTargets)
-        .filter(name => currentData[name] !== undefined || previousData[name] !== undefined) // <-- FILTER SINKRONISASI
-        .forEach(fakultas => {
-            const currentTotal = currentData[fakultas] || 0;
-            const previousTotal = previousData[fakultas] || 0;
-            const reduction = previousTotal > 0 ? ((previousTotal - currentTotal) / previousTotal) * 100 : 0;
-            combinedData[fakultas] = { total: currentTotal, reduction: reduction };
-        });
 
-        // ================== TAMBAHKAN KODE DEBUG DI SINI ==================
-    console.log("--- DEBUG DATA PENGURANGAN ---");
-    console.log("Filter Aktif:", reductionFilter);
-    console.log("Data Periode Saat Ini:", currentData);
-    console.log("Data Periode Pembanding:", previousData);
-    console.log("Hasil Kalkulasi (sebelum disortir):", combinedData);
-    // =================================================================
-
-    const sorted = Object.entries(combinedData).map(([name, values]) => ({ name, ...values })).sort((a, b) => b.reduction - a.reduction);
-
-    // Cek jika tidak ada data sama sekali untuk ditampilkan
-    if (sorted.length === 0) {
+    if (!sortedData || sortedData.length === 0) {
         container.innerHTML = '<p class="text-center text-gray-500">Tidak ada data untuk ditampilkan pada periode ini.</p>';
         return;
     }
     
-    // Langsung loop dan tampilkan semua fakultas
-    sorted.forEach((faculty, index) => {
+    // Data sudah disortir dari backend
+    sortedData.forEach((faculty, index) => {
         const color = colors[index % colors.length];
         
-        // Menentukan warna teks berdasarkan nilai: hijau untuk positif, merah untuk negatif
         const reductionValue = faculty.reduction;
-        let textColorClass = 'text-gray-600'; // Warna default untuk nol
-        if (reductionValue > 0) {
-            textColorClass = 'text-green-600';
-        } else if (reductionValue < 0) {
-            textColorClass = 'text-red-600';
-        }
+        let textColorClass = 'text-gray-600'; // Default
+        if (reductionValue > 0) textColorClass = 'text-green-600';
+        else if (reductionValue < 0) textColorClass = 'text-red-600';
         
-        // Logika untuk panjang progress bar (hanya untuk nilai > 0)
         const progress = Math.min(Math.max(reductionValue, 0), 100);
-
         const rankDisplay = (idx) => idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `<span class="text-gray-500">${idx + 1}</span>`;
         
         container.innerHTML += `
@@ -267,11 +164,10 @@ function renderReductionLeaderboard(currentData, previousData) {
                         <span class="font-bold text-lg text-gray-800">${faculty.name}</span>
                     </div>
                     <div class="text-right">
-                        <span class="font-semibold ${textColorClass}">${reductionValue === -Infinity ? 'Naik Drastis' : reductionValue.toFixed(1) + ' %'}</span>
+                        <span class="font-semibold ${textColorClass}">${reductionValue.toFixed(1)} %</span>
                         <span class="ml-2">${rankDisplay(index)}</span>
                     </div>
                 </div>
-                
                 <div class="mt-3">
                     <div class="w-full bg-gray-200 rounded-full h-2.5">
                         <div class="bg-teal-600 h-2.5 rounded-full" style="width: ${progress}%"></div>
@@ -286,27 +182,20 @@ function renderReductionLeaderboard(currentData, previousData) {
     });
 }
 
-function renderTargetLeaderboard(data) {
-    const container = document.getElementById('target-leaderboard-container');
+// Fungsi render (SEDIKIT BERUBAH): Menerima data yang sudah jadi
+function renderTargetLeaderboard(sortedData) {
+    const container = targetLeaderboardContainer;
     container.innerHTML = '';
-    const sorted = Object.keys(facultyTargets)
-        .filter(name => data[name] !== undefined) // <-- FILTER SINKRONISASI DI SINI
-        .map(name => {
-            return { 
-                name: name, 
-                total: data[name] || 0,
-                target: facultyTargets[name] 
-            };
-        }).sort((a, b) => a.total - b.total);
 
-    if (sorted.every(f => f.total === 0)) {
+    if (!sortedData || sortedData.every(f => f.total === 0)) {
         container.innerHTML = '<p class="text-center text-gray-500">Belum ada data timbunan untuk periode ini.</p>';
         return;
     }
 
-    sorted.forEach((faculty, index) => {
+    // Data sudah disortir dari backend
+    sortedData.forEach((faculty, index) => {
         const color = colors[index % colors.length];
-        const progress = Math.min((faculty.total / faculty.target) * 100, 100);
+        const progress = faculty.progress; // Ambil progress dari backend
         const rankDisplay = (idx) => idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `<span class="text-gray-500">${idx + 1}</span>`;
         
         container.innerHTML += `
@@ -323,7 +212,7 @@ function renderTargetLeaderboard(data) {
                 </div>
                 <div class="mt-3">
                     <div class="w-full bg-gray-200 rounded-full h-2">
-                        <div class="bg-teal-600 h-2.5 rounded-full" style="width: ${progress}%"></div>
+                        <div class="bg-teal-600 h-2.5 rounded-full" style="width: ${progress.toFixed(0)}%"></div>
                     </div>
                     <div class="flex justify-between text-sm text-gray-500 mt-1">
                         <span>Pencapaian: ${progress.toFixed(0)}%</span>
@@ -334,10 +223,12 @@ function renderTargetLeaderboard(data) {
     });
 }
 
-export function initFakultasPage(firebaseConfig) {
-    initializeFirebase(firebaseConfig);
-    db = getFirestoreInstance();
-    if (!db) { console.error("Firestore DB is NOT available."); return; }
+
+/**
+ * Fungsi inisialisasi utama untuk halaman ini
+ */
+export function initFakultasPage() {
+    console.log("Fakultas Page Initialized (SQL Mode)");
     
     reductionLeaderboardContainer = document.getElementById('reduction-leaderboard-container');
     targetLeaderboardContainer = document.getElementById('target-leaderboard-container');
@@ -353,18 +244,20 @@ export function initFakultasPage(firebaseConfig) {
     }
 
     updateCurrentDate('current-date');
+    updateGlobalStatCards(); // Panggil data global
     
     applyFilterButtonStyles('reduction');
     applyFilterButtonStyles('target');
 
-    reductionBtnToday.addEventListener('click', () => { reductionFilter = 'today'; applyFilterButtonStyles('reduction'); renderAllLeaderboards(); });
-    reductionBtnWeekly.addEventListener('click', () => { reductionFilter = 'weekly'; applyFilterButtonStyles('reduction'); renderAllLeaderboards(); });
-    reductionBtnMonthly.addEventListener('click', () => { reductionFilter = 'monthly'; applyFilterButtonStyles('reduction'); renderAllLeaderboards(); });
+    // Setup listener baru: panggil API saat filter diubah
+    reductionBtnToday.addEventListener('click', () => { reductionFilter = 'today'; applyFilterButtonStyles('reduction'); fetchAndRenderLeaderboards(); });
+    reductionBtnWeekly.addEventListener('click', () => { reductionFilter = 'weekly'; applyFilterButtonStyles('reduction'); fetchAndRenderLeaderboards(); });
+    reductionBtnMonthly.addEventListener('click', () => { reductionFilter = 'monthly'; applyFilterButtonStyles('reduction'); fetchAndRenderLeaderboards(); });
 
-    targetBtnToday.addEventListener('click', () => { targetFilter = 'today'; applyFilterButtonStyles('target'); renderAllLeaderboards(); });
-    targetBtnWeekly.addEventListener('click', () => { targetFilter = 'weekly'; applyFilterButtonStyles('target'); renderAllLeaderboards(); });
-    targetBtnMonthly.addEventListener('click', () => { targetFilter = 'monthly'; applyFilterButtonStyles('target'); renderAllLeaderboards(); });
+    targetBtnToday.addEventListener('click', () => { targetFilter = 'today'; applyFilterButtonStyles('target'); fetchAndRenderLeaderboards(); });
+    targetBtnWeekly.addEventListener('click', () => { targetFilter = 'weekly'; applyFilterButtonStyles('target'); fetchAndRenderLeaderboards(); });
+    targetBtnMonthly.addEventListener('click', () => { targetFilter = 'monthly'; applyFilterButtonStyles('target'); fetchAndRenderLeaderboards(); });
 
-    setupFakultasPageListener();
-    setupGlobalSampahListener();
+    // Panggil data awal saat halaman dimuat
+    fetchAndRenderLeaderboards();
 }

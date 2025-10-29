@@ -91,12 +91,12 @@
 
         {{-- TODO: Ganti dengan konfigurasi Firebase proyek  --}}
         {{-- Script Js untuk Firebase --}}
-        <script>
-            window.firebaseConfig = @json(config('services.firebase'));
+        <script type="module">
+            import { initDashboardPage } from '{{ asset('js/dashboard.js') }}';
+            
+            // Panggil fungsi init baru (tanpa config)
+            document.addEventListener('DOMContentLoaded', initDashboardPage);
         </script>
-
-        {{-- Script Js khusus Dashboard --}}
-        <script type="module" src="{{ asset('js/dashboard.js') }}"></script>
 
 </body>
 

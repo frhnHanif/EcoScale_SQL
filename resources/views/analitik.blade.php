@@ -177,14 +177,11 @@
     {{-- ==================================================================== --}}
     {{-- --- BAGIAN 4: PEMUATAN SKRIP JAVASCRIPT --- --}}
     {{-- ==================================================================== --}}
-    <script>window.firebaseConfig = @json(config('services.firebase'));</script>
     <script type="module">
-        import { initAnalitikPage } from "{{ asset('js/analitik.js') }}";
-        document.addEventListener('DOMContentLoaded', () => {
-            const firebaseConfig = window.firebaseConfig;
-            if (firebaseConfig) { initAnalitikPage(firebaseConfig); }
-            else { console.error("Firebase configuration not found."); }
-        });
+        import { initAnalitikPage } from '{{ asset('js/analitik.js') }}';
+        
+        // Panggil fungsi init baru (tanpa config)
+        document.addEventListener('DOMContentLoaded', initAnalitikPage);
     </script>
 
 </body>

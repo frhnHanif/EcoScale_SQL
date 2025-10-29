@@ -228,26 +228,14 @@
         </div>
     </div>
 
-    <script>
-        window.firebaseConfig = @json(config('services.firebase'));
-    </script>
-
     <script type="module">
         import {
             initLaporanPage
         } from "{{ asset('js/laporan.js') }}";
 
-        document.addEventListener('DOMContentLoaded', function() {
-            const firebaseConfig = window.firebaseConfig;
-
-            if (firebaseConfig) {
-                initLaporanPage(firebaseConfig);
-            } else {
-                console.error("Firebase configuration not found. Cannot initialize Laporan page.");
-            }
-        });
+        // Panggil fungsi init baru (tanpa config)
+        document.addEventListener('DOMContentLoaded', initLaporanPage);
     </script>
-
 </body>
 
 </html>

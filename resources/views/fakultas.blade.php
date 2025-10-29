@@ -90,22 +90,12 @@
         </div>
     </div>
 
-    <script>
-        window.firebaseConfig = @json(config('services.firebase'));
-    </script>
-
     <script type="module">
         import { initFakultasPage } from "{{ asset('js/fakultas.js') }}";
 
-        document.addEventListener('DOMContentLoaded', function() {
-            const firebaseConfig = window.firebaseConfig;
-
-            if (firebaseConfig) {
-                initFakultasPage(firebaseConfig);
-            } else {
-                console.error("Firebase configuration not found. Cannot initialize Fakultas page.");
-            }
-        });
+        // Panggil fungsi init baru (tanpa config)
+        document.addEventListener('DOMContentLoaded', initFakultasPage);
     </script>
+
 </body>
 </html>
